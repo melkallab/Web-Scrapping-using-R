@@ -1,0 +1,138 @@
+library(rvest)
+
+
+# Initialize an empty vector to store all article links
+all_article_links <- character(0)
+
+# Iterate through all pages
+for (page_result in 1:5) {
+  link <- paste0("https://ro-journal.biomedcentral.com/articles?tab=keyword&searchType=journalSearch&sort=PubDate&volume=17&page=", page_result)
+  
+  # Read the HTML content of the current page
+  page <- read_html(link)
+  
+  # Extract article links from the current page
+  article_links <- page %>% html_nodes(".c-listing__title a") %>%
+    html_attr("href") %>%
+    paste("https://ro-journal.biomedcentral.com", ., sep="")
+  
+  # Append the extracted links to the 'all_article_links' vector
+  all_article_links <- c(all_article_links, article_links)
+}
+
+# Initialize an empty list to store data frames for each article
+article_data_list <- list()
+
+
+# Iterate through the article links in all_article_links
+for (article_link in all_article_links) {
+  # Read the HTML content of the article page
+  article_page <- read_html(article_link)
+  
+# Extract and store information
+  title <- article_page %>% html_node(".c-article-title") %>% html_text()
+  author <- article_page %>% html_node(".c-article-author-list") %>% html_text() %>% paste(collapse = " , ")
+  author <- gsub("[^a-zA-Z ,]", "", author)
+  author <- gsub(",+", ",", author)
+  publish_date <- article_page %>% html_node("time") %>% html_text()
+  correspondence_author <- article_page %>% html_node("#corresponding-author-list a") %>% html_text()
+  correspondence_author_email <- article_page %>% html_node("#corresponding-author-list a") %>% html_attr("href")
+  correspondence_author_email <- gsub("^mailto:", "", correspondence_author_email)
+  keywords <- article_page %>% html_nodes(".c-article-subject-list__subject a") %>% html_text() %>% paste(collapse = ", ")
+  abstract <- article_page %>% html_node("#Abs1-content") %>% html_text()
+
+  # Create a data frame for the current article
+  article_data_df <- data.frame(
+    Title = title,
+    Author = author,
+    PublishDate = publish_date,
+    CorrespondenceAuthor = correspondence_author,
+    CorrespondenceAuthorEmail = correspondence_author_email,
+    Keywords = keywords,
+    Abstract = abstract
+  )
+  
+     # Add the data frame to the list
+    article_data_list <- c(article_data_list, list(article_data_df))
+   
+}
+
+# Flatten the list of data frames into a single data frame
+article_data_df <- do.call(rbind, article_data_list)
+
+# Save the data frame as a CSV file
+output_file <- "article_data.csv"
+write.csv(article_data_df, file = output_file, row.names = FALSE)
+cat("Data saved to", output_file, "\n")
+
+#################################################################
+
+install.packages("crayon")
+install.packages("ggplot2")
+
+
+##Top 10 repeating keywords in all articles
+# Create a data frame with keyword frequencies
+keyword_counts <- table(unlist(strsplit(article_data_df$Keywords, ", ")))
+keyword_data <- data.frame(Keyword = names(keyword_counts), Count = as.numeric(keyword_counts))
+
+# Find the top 10 most frequent keywords
+top_10_keywords <- head(keyword_data[order(-keyword_data$Count), ], 10)
+
+cat("Top 10 Most Frequently Appearing Keywords: ", paste(top_10_keywords$Keyword, collapse = ", "), "\n")
+
+# Create a bar chart for the top 10 keywords
+library(ggplot2)
+ggplot(top_10_keywords, aes(x = reorder(Keyword, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Top 10 Keyword Frequencies",
+       x = "Keywords",
+       y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+##Abstract word count and analysis
+
+# Count the number of words in the "Abstract" column
+article_data_df$WordCount <- sapply(strsplit(article_data_df$Abstract, "\\s+"), length)
+
+# Define the bin boundaries
+bin_breaks <- seq(0, max(article_data_df$WordCount) + 50, by = 50)
+
+# Create a new column with bin labels
+article_data_df$WordCountBin <- cut(article_data_df$WordCount, breaks = bin_breaks, include.lowest = TRUE, right = FALSE)
+
+# Calculate the proportion of abstracts in each bin
+bin_proportions <- table(article_data_df$WordCountBin) / nrow(article_data_df)
+
+# Print the bin proportions
+cat("Word Count Bin Proportions:\n")
+print(bin_proportions)
+
+# Create a bar plot of the proportions
+library(ggplot2)
+ggplot(article_data_df, aes(x = WordCountBin)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Proportion of Abstracts in Word Count Bins",
+       x = "Word Count Bin",
+       y = "Proportion")
+
+# Create a pie chart of the proportions
+library(ggplot2)
+ggplot(data = as.data.frame(bin_proportions), aes(x = "", y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y") +
+  labs(title = "Proportion of Abstracts in Word Count Bins",
+       fill = "Word Count Bin",
+       y = "Proportion") +
+  theme_void()
+
+# Find the top 3 bins with the highest proportions
+top_3_bins <- names(sort(bin_proportions, decreasing = TRUE)[1:3])
+
+# Calculate the word count proportions for the top 3 bins
+total_word_count_proportions <- sum(bin_proportions[top_3_bins])
+
+cat("Word Count Proportions for The Top 3 Bins is: ", round(total_word_count_proportions * 100, 2), "%\n")
